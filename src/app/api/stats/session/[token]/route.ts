@@ -1,10 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { getCurrentUser, isAdmin } from '@/lib/session'
+import { getCurrentUser, isAdmin, type CurrentUser } from '@/lib/session'
+
+/**
+ * Helper: puede el usuario ver stats de esta sesion?
+ * Mismo criterio que /api/sessions/[token]/route.ts (PATCH/DELETE).
+ */
+type SessionOwnership = {
+  subject: { ownerId: string | null } | null
+  createdByUserId: string | null
+}
+function canViewSession(user: CurrentUser, session: SessionOwnership): boolean {
+  if (isAdmin(user)) return true
+  if (session.createdByUserId && session.createdByUserId === user.userId) return true
+  if (session.subject?.ownerId && session.subject.ownerId === user.userId) return true
+  return false
+}
 
 /**
  * GET /api/stats/session/[token]
- * Estadisticas de una sesion. Requiere ser dueno de la materia o admin.
+ * Estadisticas de una sesion. Requiere ser el creador, o dueno de la materia
+ * (legacy), o admin.
  */
 export async function GET(
   req: NextRequest,
@@ -22,7 +38,7 @@ export async function GET(
   if (!session) {
     return NextResponse.json({ error: 'Sesion no encontrada' }, { status: 404 })
   }
-  if (!isAdmin(user) && session.subject?.ownerId !== user.userId) {
+  if (!canViewSession(user, session)) {
     return NextResponse.json({ error: 'No tienes permiso sobre esta sesion' }, { status: 403 })
   }
   const attendances = await db.attendance.findMany({

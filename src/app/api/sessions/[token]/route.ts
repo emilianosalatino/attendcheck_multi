@@ -1,6 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { getCurrentUser, isAdmin } from '@/lib/session'
+import { getCurrentUser, isAdmin, type CurrentUser } from '@/lib/session'
+
+/**
+ * Helper: puede el usuario modificar esta sesion?
+ *   - Admin: SI
+ *   - Creador directo (createdByUserId): SI
+ *   - Dueno del subject (legacy, para sesiones viejas sin createdByUserId): SI
+ *
+ *Esto permite que un maestro cierre/borre SUS sesiones (creadas por el)
+ *incluso si la sesion no tiene materia asignada.
+ */
+type SessionOwnership = {
+  subject: { ownerId: string | null } | null
+  createdByUserId: string | null
+}
+function canModifySession(user: CurrentUser, session: SessionOwnership): boolean {
+  if (isAdmin(user)) return true
+  if (session.createdByUserId && session.createdByUserId === user.userId) return true
+  if (session.subject?.ownerId && session.subject.ownerId === user.userId) return true
+  return false
+}
 
 /**
  * GET /api/sessions/[token]
@@ -40,8 +60,14 @@ export async function GET(
 
 /**
  * PATCH /api/sessions/[token]
- * Cierra/reabre sesion. Requiere auth del dueno de la materia o admin.
- * Al reabrir, se extiende endsAt por la duracion original.
+ * Cierra/reabre sesion. Requiere ser el creador de la sesion (createdByUserId),
+ * o el dueno de la materia (legacy si la sesion tiene subject), o admin.
+ *
+ * Al reabrir:
+ *   - Si body.durationMin viene, se usa esa cantidad de minutos NUEVOS desde ahora.
+ *   - Si no, se usa la durationMin original de la sesion.
+ *   Esto permite al maestro elegir "reabrir por X minutos" en vez de
+ *   siempre la duracion original (v14.3).
  */
 export async function PATCH(
   req: NextRequest,
@@ -58,27 +84,41 @@ export async function PATCH(
   // Verificar ownership
   const session = await db.classSession.findUnique({
     where: { token },
-    select: { id: true, subject: { select: { ownerId: true } } },
+    select: {
+      id: true,
+      subject: { select: { ownerId: true } },
+      createdByUserId: true,
+      durationMin: true,
+    },
   })
   if (!session) {
     return NextResponse.json({ error: 'Sesion no encontrada' }, { status: 404 })
   }
-  if (!isAdmin(user) && session.subject?.ownerId !== user.userId) {
+  if (!canModifySession(user, session)) {
     return NextResponse.json({ error: 'No tienes permiso sobre esta sesion' }, { status: 403 })
   }
 
   const now = new Date()
-  const updateData: { isActive: boolean; endsAt?: Date; startsAt?: Date } = { isActive }
+  const updateData: { isActive: boolean; endsAt?: Date; startsAt?: Date; durationMin?: number } = {
+    isActive,
+  }
 
   if (isActive) {
-    const existing = await db.classSession.findUnique({
-      where: { token },
-      select: { durationMin: true },
-    })
-    if (!existing) {
-      return NextResponse.json({ error: 'Sesion no encontrada' }, { status: 404 })
+    // Determinar duracion: si body.durationMin viene y es valido, usarlo.
+    // Si no, usar la durationMin guardada en la sesion.
+    let dur = session.durationMin
+    if (body.durationMin !== undefined) {
+      const candidate = Number(body.durationMin)
+      if (!Number.isFinite(candidate) || candidate < 1 || candidate > 1440) {
+        return NextResponse.json(
+          { error: 'La duracion debe ser un numero entre 1 y 1440 minutos' },
+          { status: 400 }
+        )
+      }
+      dur = Math.floor(candidate)
     }
-    updateData.endsAt = new Date(now.getTime() + existing.durationMin * 60_000)
+    updateData.durationMin = dur
+    updateData.endsAt = new Date(now.getTime() + dur * 60_000)
     updateData.startsAt = now
   }
 
@@ -91,7 +131,7 @@ export async function PATCH(
 
 /**
  * DELETE /api/sessions/[token]
- * Borra sesion (cascade). Requiere auth del dueno de la materia o admin.
+ * Borra sesion (cascade). Requiere ser el creador, o dueno de la materia, o admin.
  */
 export async function DELETE(
   req: NextRequest,
@@ -106,12 +146,12 @@ export async function DELETE(
   // Verificar ownership
   const session = await db.classSession.findUnique({
     where: { token },
-    select: { id: true, subject: { select: { ownerId: true } } },
+    select: { id: true, subject: { select: { ownerId: true } }, createdByUserId: true },
   })
   if (!session) {
     return NextResponse.json({ error: 'Sesion no encontrada' }, { status: 404 })
   }
-  if (!isAdmin(user) && session.subject?.ownerId !== user.userId) {
+  if (!canModifySession(user, session)) {
     return NextResponse.json({ error: 'No tienes permiso sobre esta sesion' }, { status: 403 })
   }
 

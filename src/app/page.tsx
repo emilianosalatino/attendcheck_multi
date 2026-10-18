@@ -23,6 +23,7 @@ import {
   BookOpen,
   Plus,
   Edit3,
+  KeyRound,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -43,6 +44,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogClose,
 } from '@/components/ui/dialog'
 import {
   AlertDialog,
@@ -187,6 +189,8 @@ function TeacherDashboard() {
   const [duration, setDuration] = useState(15)
   const [expectedStudents, setExpectedStudents] = useState(0)
   const [selectedSubjectId, setSelectedSubjectId] = useState<string>('')
+  // v14.3: fecha/hora de cierre opcional (datetime-local string, formato HTML: yyyy-MM-ddTHH:mm)
+  const [endsAtLocal, setEndsAtLocal] = useState<string>('')
   const [creating, setCreating] = useState(false)
   const [qrSession, setQrSession] = useState<SessionInfo | null>(null)
 
@@ -263,14 +267,30 @@ function TeacherDashboard() {
     }
     setCreating(true)
     try {
+      // Convertir endsAtLocal (formato HTML datetime-local: "yyyy-MM-ddTHH:mm")
+      // a ISO string. Si el usuario no seteo fecha, mandamos solo durationMin
+      // y el server calcula startsAt+durationMin.
+      const body: Record<string, unknown> = {
+        name: name.trim(),
+        durationMin: duration,
+        subjectId: selectedSubjectId || null,
+        expectedStudents,
+      }
+      if (endsAtLocal) {
+        // El navegador no incluye timezone en datetime-local. Lo parseamos
+        // como local time y lo convertimos a ISO con la TZ del cliente.
+        const parsed = new Date(endsAtLocal)
+        if (!Number.isNaN(parsed.getTime()) && parsed.getTime() > Date.now()) {
+          body.endsAt = parsed.toISOString()
+        } else {
+          toast.error('La fecha/hora de cierre debe ser valida y en el futuro')
+          setCreating(false)
+          return
+        }
+      }
       const res = await authedFetch('/api/sessions', {
         method: 'POST',
-        body: JSON.stringify({
-          name: name.trim(),
-          durationMin: duration,
-          subjectId: selectedSubjectId || null,
-          expectedStudents,
-        }),
+        body: JSON.stringify(body),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
@@ -281,6 +301,7 @@ function TeacherDashboard() {
       setDuration(15)
       setExpectedStudents(0)
       setSelectedSubjectId('')
+      setEndsAtLocal('')
       await load()
       setQrSession(data.session as SessionInfo)
       toast.success('Sesion creada. Muestra el QR a tus alumnos.')
@@ -291,17 +312,54 @@ function TeacherDashboard() {
     }
   }
 
+  // ====== Reabrir sesion con minutos custom (v14.3) ======
+  // Al reabrir, en vez de siempre usar la duracion original, le preguntamos al
+  // maestro cuantos minutos quiere. Si cancela el dialogo, no hace nada.
+  const [reopenSession, setReopenSession] = useState<SessionInfo | null>(null)
+  const [reopenMinutes, setReopenMinutes] = useState<number>(15)
+
   const toggleActive = async (s: SessionInfo) => {
     const next = !s.isActive
+    if (!next) {
+      // Cerrar: directo, sin dialogo
+      try {
+        await authedFetch(`/api/sessions/${s.token}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ isActive: false }),
+        })
+        await load()
+        toast.success('Sesion cerrada')
+      } catch {
+        toast.error('No se pudo cerrar la sesion')
+      }
+      return
+    }
+    // Reabrir: abrir dialogo para elegir minutos (default = duracion original)
+    setReopenSession(s)
+    setReopenMinutes(s.durationMin || 15)
+  }
+
+  const confirmReopen = async () => {
+    if (!reopenSession) return
+    if (reopenMinutes < 1 || reopenMinutes > 1440) {
+      toast.error('Los minutos deben estar entre 1 y 1440')
+      return
+    }
     try {
-      await authedFetch(`/api/sessions/${s.token}`, {
+      const res = await authedFetch(`/api/sessions/${reopenSession.token}`, {
         method: 'PATCH',
-        body: JSON.stringify({ isActive: next }),
+        body: JSON.stringify({ isActive: true, durationMin: reopenMinutes }),
       })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'No se pudo reabrir')
+      }
       await load()
-      toast.success(next ? 'Sesion reabierta' : 'Sesion cerrada')
-    } catch {
-      toast.error('No se pudo cambiar el estado')
+      toast.success(`Sesion reabierta por ${reopenMinutes} minutos`)
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setReopenSession(null)
     }
   }
 
@@ -398,6 +456,100 @@ function TeacherDashboard() {
   const [newUserName, setNewUserName] = useState('')
   const [newUserPassword, setNewUserPassword] = useState('')
   const [creatingUser, setCreatingUser] = useState(false)
+
+  // ====== Cambio de contraseña ======
+  // - changingOwnPassword: cualquier usuario logueado puede cambiar SU contraseña
+  // - resetUser: el admin resetea la contraseña de un profesor (no pide current pw)
+  const [ownPwOpen, setOwnPwOpen] = useState(false)
+  const [ownCurrent, setOwnCurrent] = useState('')
+  const [ownNew, setOwnNew] = useState('')
+  const [ownConfirm, setOwnConfirm] = useState('')
+  const [ownPwBusy, setOwnPwBusy] = useState(false)
+
+  const [resetUser, setResetUser] = useState<any | null>(null)
+  const [resetNew, setResetNew] = useState('')
+  const [resetConfirm, setResetConfirm] = useState('')
+  const [resetBusy, setResetBusy] = useState(false)
+
+  const changeOwnPassword = async () => {
+    if (!ownCurrent || !ownNew || !ownConfirm) {
+      toast.error('Completa todos los campos')
+      return
+    }
+    if (ownNew !== ownConfirm) {
+      toast.error('La nueva contraseña y su confirmacion no coinciden')
+      return
+    }
+    if (ownNew.length < 6) {
+      toast.error('La nueva contraseña debe tener al menos 6 caracteres')
+      return
+    }
+    if (ownNew === ownCurrent) {
+      toast.error('La nueva contraseña debe ser distinta a la actual')
+      return
+    }
+    setOwnPwBusy(true)
+    try {
+      const res = await authedFetch('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({
+          currentPassword: ownCurrent,
+          newPassword: ownNew,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || 'No se pudo cambiar la contraseña')
+      }
+      toast.success('Contraseña cambiada. Recorda usar la nueva la proxima vez.')
+      if (data.notice) {
+        toast.info(data.notice, { duration: 8000 })
+      }
+      setOwnPwOpen(false)
+      setOwnCurrent('')
+      setOwnNew('')
+      setOwnConfirm('')
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setOwnPwBusy(false)
+    }
+  }
+
+  const resetUserPassword = async () => {
+    if (!resetUser) return
+    if (!resetNew || !resetConfirm) {
+      toast.error('Completa todos los campos')
+      return
+    }
+    if (resetNew !== resetConfirm) {
+      toast.error('La nueva contraseña y su confirmacion no coinciden')
+      return
+    }
+    if (resetNew.length < 6) {
+      toast.error('La contraseña debe tener al menos 6 caracteres')
+      return
+    }
+    setResetBusy(true)
+    try {
+      const res = await authedFetch(`/api/users/${resetUser.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ password: resetNew }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'No se pudo cambiar la contraseña')
+      }
+      toast.success(`Contraseña de ${resetUser.name} actualizada`)
+      setResetUser(null)
+      setResetNew('')
+      setResetConfirm('')
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setResetBusy(false)
+    }
+  }
 
   const loadUsers = useCallback(async () => {
     try {
@@ -529,10 +681,19 @@ function TeacherDashboard() {
   // --- Boton de logout arriba a la derecha ---
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 w-full relative">
-      <div className="absolute right-4 top-4 z-10 flex items-center gap-3">
+      <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
         <span className="text-xs text-zinc-500 hidden sm:inline">
           {user?.name} ({user?.role === 'ADMIN' ? 'Admin' : 'Maestro'})
         </span>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setOwnPwOpen(true)}
+          title="Cambiar mi contraseña"
+        >
+          <KeyRound className="size-4 mr-1" />
+          <span className="hidden sm:inline">Mi contraseña</span>
+        </Button>
         <Button
           size="sm"
           variant="ghost"
@@ -545,6 +706,177 @@ function TeacherDashboard() {
           Salir
         </Button>
       </div>
+
+      {/* Dialog: Cambiar mi propia contraseña (cualquier usuario logueado) */}
+      <Dialog open={ownPwOpen} onOpenChange={setOwnPwOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cambiar mi contraseña</DialogTitle>
+            <DialogDescription>
+              Te pedimos la contraseña actual por seguridad. La nueva debe tener
+              al menos 6 caracteres y ser distinta.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 py-2">
+            <div className="grid gap-2">
+              <Label htmlFor="own_current">Contraseña actual</Label>
+              <Input
+                id="own_current"
+                type="password"
+                value={ownCurrent}
+                onChange={(e) => setOwnCurrent(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="own_new">Nueva contraseña</Label>
+              <Input
+                id="own_new"
+                type="password"
+                value={ownNew}
+                onChange={(e) => setOwnNew(e.target.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="own_confirm">Repetir nueva contraseña</Label>
+              <Input
+                id="own_confirm"
+                type="password"
+                value={ownConfirm}
+                onChange={(e) => setOwnConfirm(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !ownPwBusy) changeOwnPassword()
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={ownPwBusy}>Cancelar</Button>
+            </DialogClose>
+            <Button
+              onClick={changeOwnPassword}
+              disabled={ownPwBusy || !ownCurrent || !ownNew || !ownConfirm}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {ownPwBusy ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="size-4" />
+              )}
+              Cambiar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Admin resetea contraseña de un profesor */}
+      <Dialog
+        open={!!resetUser}
+        onOpenChange={(o) => { if (!o) { setResetUser(null); setResetNew(''); setResetConfirm('') } }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cambiar contraseña de {resetUser?.name}</DialogTitle>
+            <DialogDescription>
+              Como admin, no necesitas saber la contraseña actual. Solo definí
+              la nueva (mínimo 6 caracteres). Avisale al profesor.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 py-2">
+            <div className="grid gap-2">
+              <Label htmlFor="reset_new">Nueva contraseña</Label>
+              <Input
+                id="reset_new"
+                type="password"
+                value={resetNew}
+                onChange={(e) => setResetNew(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="reset_confirm">Repetir contraseña</Label>
+              <Input
+                id="reset_confirm"
+                type="password"
+                value={resetConfirm}
+                onChange={(e) => setResetConfirm(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !resetBusy) resetUserPassword()
+                }}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline" disabled={resetBusy}>Cancelar</Button>
+            </DialogClose>
+            <Button
+              onClick={resetUserPassword}
+              disabled={resetBusy || !resetNew || !resetConfirm}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              {resetBusy ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <KeyRound className="size-4" />
+              )}
+              Cambiar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Reabrir sesion con minutos custom (v14.3) */}
+      <Dialog
+        open={!!reopenSession}
+        onOpenChange={(o) => { if (!o) setReopenSession(null) }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reabrir sesión</DialogTitle>
+            <DialogDescription>
+              {reopenSession ? (
+                <>
+                  Vas a reabrir <strong className="text-zinc-900">{reopenSession.name}</strong>.
+                  Elegí por cuántos minutos dejarla activa. El contador arranca ahora mismo.
+                </>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 py-2">
+            <Label htmlFor="reopen_min">Minutos de apertura</Label>
+            <Input
+              id="reopen_min"
+              type="number"
+              min={1}
+              max={1440}
+              value={reopenMinutes}
+              onChange={(e) => setReopenMinutes(Number(e.target.value) || 15)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') confirmReopen()
+              }}
+            />
+            <p className="text-[11px] text-zinc-500">
+              Máximo 1440 (24 hs). La duración original era {reopenSession?.durationMin ?? '?'} min.
+            </p>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Cancelar</Button>
+            </DialogClose>
+            <Button
+              onClick={confirmReopen}
+              disabled={reopenMinutes < 1 || reopenMinutes > 1440}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              <Play className="size-4" />
+              Reabrir {reopenMinutes || 0} min
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Tabs defaultValue="sesiones" className="w-full">
         <TabsList className={`grid w-full max-w-md mb-4 ${user?.role === 'ADMIN' ? 'grid-cols-3' : 'grid-cols-2'}`}>
@@ -625,10 +957,38 @@ function TeacherDashboard() {
                     id="dur"
                     type="number"
                     min={1}
-                    max={480}
+                    max={1440}
                     value={duration}
                     onChange={(e) => setDuration(Number(e.target.value) || 15)}
                   />
+                </div>
+              </div>
+              {/* Fecha/hora de cierre opcional. Si se setea, overridea Vigencia. */}
+              <div className="grid gap-2">
+                <Label htmlFor="endsat" className="flex items-center gap-1">
+                  Cerrar a fecha/hora exacta
+                  <span className="text-[10px] text-zinc-400 font-normal">
+                    (opcional — si lo seteas, ignora la vigencia en minutos)
+                  </span>
+                </Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    id="endsat"
+                    type="datetime-local"
+                    value={endsAtLocal}
+                    onChange={(e) => setEndsAtLocal(e.target.value)}
+                    className="flex-1 min-w-[200px]"
+                  />
+                  {endsAtLocal && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setEndsAtLocal('')}
+                    >
+                      Limpiar
+                    </Button>
+                  )}
                 </div>
               </div>
               <Button
@@ -876,35 +1236,50 @@ function TeacherDashboard() {
                         </div>
                       </div>
                       {u.role !== 'ADMIN' && (
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                            >
-                              <Trash2 className="size-4" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>¿Eliminar a {u.name}?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Se borrara el profesor. Sus materias quedaran sin dueno
-                                (puedes reasignarlas despues). Esta accion no se puede deshacer.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => deleteUser(u.id)}
-                                className="bg-red-600 hover:bg-red-700 text-white"
+                        <div className="flex gap-2 shrink-0">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setResetUser(u)
+                              setResetNew('')
+                              setResetConfirm('')
+                            }}
+                            title="Cambiar contraseña"
+                          >
+                            <KeyRound className="size-4" />
+                            <span className="hidden sm:inline ml-1">Contraseña</span>
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-red-600 hover:text-red-700 hover:bg-red-50"
                               >
-                                <Trash2 className="size-4" /> Eliminar
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                                <Trash2 className="size-4" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>¿Eliminar a {u.name}?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Se borrara el profesor. Sus materias quedaran sin dueno
+                                  (puedes reasignarlas despues). Esta accion no se puede deshacer.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => deleteUser(u.id)}
+                                  className="bg-red-600 hover:bg-red-700 text-white"
+                                >
+                                  <Trash2 className="size-4" /> Eliminar
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
                       )}
                     </CardContent>
                   </Card>

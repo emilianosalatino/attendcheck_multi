@@ -57,13 +57,15 @@ CREATE TABLE IF NOT EXISTS "ClassSession" (
     "name" TEXT NOT NULL,
     "token" TEXT NOT NULL,
     "subjectId" TEXT,
+    "createdByUserId" TEXT,
     "startsAt" DATETIME NOT NULL,
     "endsAt" DATETIME NOT NULL,
     "durationMin" INTEGER NOT NULL,
     "expectedStudents" INTEGER NOT NULL DEFAULT 0,
     "isActive" BOOLEAN NOT NULL DEFAULT 1,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY ("subjectId") REFERENCES "Subject"("id") ON DELETE SET NULL
+    FOREIGN KEY ("subjectId") REFERENCES "Subject"("id") ON DELETE SET NULL,
+    FOREIGN KEY ("createdByUserId") REFERENCES "User"("id") ON DELETE SET NULL
 );
 
 -- Tabla de registros de asistencia
@@ -86,6 +88,9 @@ CREATE TABLE IF NOT EXISTS "Attendance" (
 -- Migracion: si la tabla ClassSession ya existe sin las columnas nuevas, las agrega
 ALTER TABLE "ClassSession" ADD COLUMN "subjectId" TEXT REFERENCES "Subject"("id") ON DELETE SET NULL;
 ALTER TABLE "ClassSession" ADD COLUMN "expectedStudents" INTEGER NOT NULL DEFAULT 0;
+-- Migracion v14: agregar createdByUserId para ownership directo de sesiones.
+-- Si un maestro crea sesion sin materia, sigue siendo suya.
+ALTER TABLE "ClassSession" ADD COLUMN "createdByUserId" TEXT REFERENCES "User"("id") ON DELETE SET NULL;
 
 -- Migracion: columnas de nombre (Fase 1)
 ALTER TABLE "Attendance" ADD COLUMN "studentGivenNames" TEXT NOT NULL DEFAULT '';
@@ -99,6 +104,7 @@ CREATE INDEX IF NOT EXISTS "Attendance_sessionId_idx" ON "Attendance"("sessionId
 CREATE INDEX IF NOT EXISTS "Attendance_deviceFp_idx" ON "Attendance"("deviceFp");
 CREATE INDEX IF NOT EXISTS "Attendance_studentId_idx" ON "Attendance"("studentId");
 CREATE INDEX IF NOT EXISTS "ClassSession_subjectId_idx" ON "ClassSession"("subjectId");
+CREATE INDEX IF NOT EXISTS "ClassSession_createdByUserId_idx" ON "ClassSession"("createdByUserId");
 `
 
 async function main() {

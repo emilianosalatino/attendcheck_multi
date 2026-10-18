@@ -25,6 +25,8 @@ model User {
   createdAt    DateTime @default(now())
 
   subjects Subject[]
+  /// Sesiones creadas por este usuario (ownership directo, independientemente del subject)
+  createdSessions ClassSession[]
 
   @@index([role])
 }
@@ -56,6 +58,11 @@ model ClassSession {
   /// Materia a la que pertenece (opcional para sesiones legacy)
   subjectId String?
   subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  /// Profesor que creo esta sesion ( ownership directo, no depende del subject )
+  /// Si subjectId es null (sesion sin materia), este campo resuelve la pregunta
+  /// "quien puede ver/editar esta sesion".
+  createdByUserId String?
+  createdBy        User?  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
   /// Fecha/hora en que inicia la ventana de asistencia
   startsAt  DateTime
   /// Fecha/hora en que caduca el QR (default: startsAt + durationMin)
@@ -73,6 +80,7 @@ model ClassSession {
   @@index([token])
   @@index([isActive])
   @@index([subjectId])
+  @@index([createdByUserId])
 }
 
 /// Registro de asistencia de un alumno a una sesion

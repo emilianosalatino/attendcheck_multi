@@ -1,10 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { getCurrentUser, isAdmin } from '@/lib/session'
+import { getCurrentUser, isAdmin, type CurrentUser } from '@/lib/session'
+
+/**
+ * Helper: puede el usuario modificar/borrar un registro de asistencia?
+ * Mismo criterio que /api/sessions/[token]/route.ts (PATCH/DELETE):
+ *   - Admin: SI
+ *   - Creador de la sesion (createdByUserId): SI
+ *   - Dueno del subject (legacy): SI
+ */
+type SessionOwnership = {
+  subject: { ownerId: string | null } | null
+  createdByUserId: string | null
+}
+function canModifyAttendance(user: CurrentUser, session: SessionOwnership): boolean {
+  if (isAdmin(user)) return true
+  if (session.createdByUserId && session.createdByUserId === user.userId) return true
+  if (session.subject?.ownerId && session.subject.ownerId === user.userId) return true
+  return false
+}
 
 /**
  * DELETE /api/attendance/[id]
- * Borra un registro individual. Requiere ser dueno de la sesion o admin.
+ * Borra un registro individual. Requiere ser el creador de la sesion, o
+ * dueno de la materia (legacy), o admin.
  */
 export async function DELETE(
   req: NextRequest,
@@ -24,6 +43,7 @@ export async function DELETE(
       session: {
         select: {
           subject: { select: { ownerId: true } },
+          createdByUserId: true,
         },
       },
     },
@@ -31,7 +51,7 @@ export async function DELETE(
   if (!attendance) {
     return NextResponse.json({ error: 'Registro no encontrado' }, { status: 404 })
   }
-  if (!isAdmin(user) && attendance.session?.subject?.ownerId !== user.userId) {
+  if (!canModifyAttendance(user, attendance.session)) {
     return NextResponse.json({ error: 'No tienes permiso sobre este registro' }, { status: 403 })
   }
 

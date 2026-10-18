@@ -53,8 +53,15 @@ export async function PATCH(
     }
   }
   if (body.password) {
+    const newPw = String(body.password)
+    if (newPw.length < 6) {
+      return NextResponse.json(
+        { error: 'La nueva contraseña debe tener al menos 6 caracteres' },
+        { status: 400 }
+      )
+    }
     const bcrypt = await import('bcryptjs')
-    data.passwordHash = await bcrypt.hash(String(body.password), 10)
+    data.passwordHash = await bcrypt.hash(newPw, 10)
   }
 
   try {
