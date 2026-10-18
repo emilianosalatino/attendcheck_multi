@@ -1,0 +1,109 @@
+// Checador de Asistencia - Schema
+// Stack: SQLite via libSQL adapter (local file en dev, Turso en produccion)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // El adapter libsql se engancha en src/lib/db.ts.
+  // Funciona igual con un archivo local (file:) que con Turso remoto (libsql://).
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Usuario del sistema: admin root o profesor
+model User {
+  id           String   @id @default(cuid())
+  /// Nombre de usuario unico (NO es email; solo identificador de login)
+  username     String   @unique
+  name         String
+  /// Hash bcrypt del password
+  passwordHash String
+  /// "ADMIN" o "TEACHER"
+  role         String   @default("TEACHER")
+  createdAt    DateTime @default(now())
+
+  subjects Subject[]
+
+  @@index([role])
+}
+
+/// Una materia/grupo impartido por el maestro (ej. "Calculo Diferencial - Grupo A")
+model Subject {
+  id        String   @id @default(cuid())
+  name      String
+  /// Color opcional para distinguir en la UI (hex sin #)
+  color     String   @default("0f766e")
+  /// Profesor dueno de esta materia (null = sin asignar, o admin la ve todo)
+  ownerId   String?
+  owner     User?    @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  sessions ClassSession[]
+
+  @@index([createdAt])
+  @@index([ownerId])
+}
+
+/// Una sesion de clase (un dia/hora en que el maestro abre el QR)
+model ClassSession {
+  id        String   @id @default(cuid())
+  /// Nombre visible de la sesion, ej. "Sesion del 15 oct"
+  name      String
+  /// Token unico que va codificado en el QR (URL ?t=<token>)
+  token     String   @unique
+  /// Materia a la que pertenece (opcional para sesiones legacy)
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  /// Fecha/hora en que inicia la ventana de asistencia
+  startsAt  DateTime
+  /// Fecha/hora en que caduca el QR (default: startsAt + durationMin)
+  endsAt    DateTime
+  /// Minutos de validez del QR
+  durationMin Int    @default(15)
+  /// Cuantos alumnos se esperan (para calcular % asistencia). 0 = no especificado
+  expectedStudents Int @default(0)
+  /// Activa manualmente o solo por ventana de tiempo
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  attendances Attendance[]
+
+  @@index([token])
+  @@index([isActive])
+  @@index([subjectId])
+}
+
+/// Registro de asistencia de un alumno a una sesion
+model Attendance {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   ClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  /// Matricula o numero de control del alumno. Formato: AASSFNNNN
+  ///   AA = ano de ingreso (08-99), SS = semestre, F = letra F, NNNN = consecutivo
+  studentId String
+  /// Nombre(s) del alumno (puede ser uno o dos nombres). Obligatorio.
+  studentGivenNames String
+  /// Apellido paterno. Obligatorio.
+  studentPaternalSurname String
+  /// Apellido materno. Opcional (puede ser null/empty).
+  studentMaternalSurname String?
+  /// Hash de huella del dispositivo (server-side: UA + IP + Accept headers)
+  deviceFp  String
+  /// IP del cliente (para auditoria)
+  ip        String?
+  /// User-Agent completo (para auditoria)
+  userAgent String?
+  /// Momento exacto del registro
+  submittedAt DateTime @default(now())
+  /// Marcado como sospechoso (truco detectado)
+  flagged   Boolean  @default(false)
+  /// Razon de la bandera, ej. "Mismo dispositivo, distinta matricula"
+  flagReason String?
+
+  @@unique([sessionId, studentId])
+  @@index([sessionId])
+  @@index([deviceFp])
+  @@index([studentId])
+}
