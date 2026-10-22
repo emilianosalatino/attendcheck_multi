@@ -1382,10 +1382,26 @@ function SessionRow({
                 minute: '2-digit',
               })}{' '}
               -{' '}
-              {endsAt.toLocaleTimeString('es-MX', {
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
+              {(() => {
+                // Si startsAt y endsAt son el mismo día, solo mostramos la hora
+                // del cierre (más limpio). Si son distintos días, mostramos
+                // fecha + hora del cierre (para que se vea claramente cuándo
+                // caduca, no solo la hora).
+                const sameDay =
+                  startsAt.toDateString() === endsAt.toDateString()
+                if (sameDay) {
+                  return endsAt.toLocaleTimeString('es-MX', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                }
+                return endsAt.toLocaleString('es-MX', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              })()}
             </span>
           </div>
           <div className="text-sm font-medium text-zinc-800 truncate">
