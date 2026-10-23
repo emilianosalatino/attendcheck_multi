@@ -2680,7 +2680,7 @@ function StudentAttendanceForm({ token }: { token: string }) {
                   maxLength={9}
                 />
                 <p className="text-[10px] text-zinc-500">
-                  Formato: AASSFNNNN — AA = ano (08-99), SS = semestre, F =
+                  Formato: AASSFNNNN — AA = año (08-99), SS = semestre, F =
                   letra F, NNNN = consecutivo.
                   {studentId.length > 0 && !isMatriculaValid && (
                     <span className="text-red-600 ml-1">Formato invalido</span>
