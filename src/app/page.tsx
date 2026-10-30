@@ -1472,10 +1472,14 @@ function SessionRow({
           </Button>
           <Button
             size="sm"
-            variant={s.isActive ? 'destructive' : 'outline'}
+            // Mostrar "Cerrar" (rojo) SOLO si status === 'active'.
+            // Si status === 'expired' (caducó por tiempo) o 'closed' (cerrada manual),
+            // mostrar "Abrir" (outline). Antes solo mirabamos s.isActive, lo cual
+            // dejaba el botón en "Cerrar" aunque la sesión ya hubiera caducado.
+            variant={status === 'active' ? 'destructive' : 'outline'}
             onClick={onToggle}
           >
-            {s.isActive ? (
+            {status === 'active' ? (
               <>
                 <StopCircle className="size-4" /> Cerrar
               </>
