@@ -356,8 +356,20 @@ function TeacherDashboard() {
   const [reopenMinutes, setReopenMinutes] = useState<number>(15)
 
   const toggleActive = async (s: SessionInfo) => {
-    const next = !s.isActive
-    if (!next) {
+    // Calcular el status real igual que en SessionRow:
+    //   active  = isActive && ahora <= endsAt
+    //   expired = isActive && ahora > endsAt (caducó por tiempo)
+    //   closed  = !isActive (cerrada manualmente)
+    // El botón muestra "Cerrar" solo si status === 'active'.
+    // Si status === 'expired' o 'closed', muestra "Abrir".
+    // Antes usabamos `!s.isActive` que rompia para sesiones caducadas:
+    // una sesión caducada tiene isActive=true → next=false → la "cerraba"
+    // en vez de abrir el dialogo de reabrir.
+    const now = new Date()
+    const isExpired = now > new Date(s.endsAt)
+    const isCurrentlyActive = s.isActive && !isExpired
+
+    if (isCurrentlyActive) {
       // Cerrar: directo, sin dialogo
       try {
         await authedFetch(`/api/sessions/${s.token}`, {
@@ -371,7 +383,8 @@ function TeacherDashboard() {
       }
       return
     }
-    // Reabrir: abrir dialogo para elegir minutos (default = duracion original)
+    // Reabrir (ya sea porque caducó por tiempo o fue cerrada manual):
+    // abrir dialogo para elegir minutos (default = duracion original)
     setReopenSession(s)
     setReopenMinutes(s.durationMin || 15)
   }
