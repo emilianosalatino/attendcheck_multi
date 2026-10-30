@@ -65,6 +65,43 @@ import { Toaster } from '@/components/ui/sonner'
 
 import { useAuth, type AuthUser } from '@/hooks/use-auth'
 
+// ============================================================
+// Helpers de seguridad para exports Excel/CSV
+// ============================================================
+
+/**
+ * Sanitiza un valor de celda para prevenir inyección de fórmulas en Excel/CSV
+ * (CWE-1236). Si el string empieza con =, +, -, @, \t o \r, le antepone un
+ * apóstrofe ' para que Excel lo trate como texto literal en vez de fórmula.
+ *
+ * Casos típicos:
+ *   "=cmd|'/C calc'!A0"        → "'=cmd|'/C calc'!A0"
+ *   "+1+1"                     → "'+1+1"
+ *   "@SUM(A1:A2)"              → "'@SUM(A1:A2)"
+ *   "Juan Pérez"               → "Juan Pérez"  (sin cambio)
+ */
+function sanitizeCell(v: unknown): string | number | null {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'number') return v
+  if (typeof v === 'boolean') return v ? 'SÍ' : 'NO'
+  let s = String(v)
+  // Si empieza con caracter peligroso, anteponer apóstrofe
+  if (/^[=+\-@\t\r]/.test(s)) {
+    s = "'" + s
+  }
+  // Eliminar caracteres de control que podrían romper CSV/Excel
+  s = s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+  return s
+}
+
+/**
+ * Aplica sanitizeCell a una matriz 2D (array of arrays) antes de pasarla
+ * a XLSX.utils.aoa_to_sheet. Mantiene números y strings seguros.
+ */
+function sanitizeMatrix(m: (string | number | null)[][]): (string | number | null)[][] {
+  return m.map((row) => row.map(sanitizeCell))
+}
+
 type SessionInfo = {
   id: string
   name: string
@@ -237,7 +274,7 @@ function TeacherDashboard() {
         authedFetch('/api/subjects'),
       ])
       if (resSes.status === 401 || resSub.status === 401) {
-        toast.error('Tu sesión expiro. Vuelve a loguearte.')
+        toast.error('Tu sesion expiro. Vuelve a loguearte.')
         return
       }
       const dataSes = await resSes.json()
@@ -283,7 +320,7 @@ function TeacherDashboard() {
         if (!Number.isNaN(parsed.getTime()) && parsed.getTime() > Date.now()) {
           body.endsAt = parsed.toISOString()
         } else {
-          toast.error('La fecha/hora de cierre debe ser válida y en el futuro')
+          toast.error('La fecha/hora de cierre debe ser valida y en el futuro')
           setCreating(false)
           return
         }
@@ -304,7 +341,7 @@ function TeacherDashboard() {
       setEndsAtLocal('')
       await load()
       setQrSession(data.session as SessionInfo)
-      toast.success('Sesión creada. Muestra el QR a tus alumnos.')
+      toast.success('Sesion creada. Muestra el QR a tus alumnos.')
     } catch (e) {
       toast.error((e as Error).message)
     } finally {
@@ -334,7 +371,7 @@ function TeacherDashboard() {
       }
       return
     }
-    // Reabrir: abrir diálogo para elegir minutos (default = duración original)
+    // Reabrir: abrir dialogo para elegir minutos (default = duracion original)
     setReopenSession(s)
     setReopenMinutes(s.durationMin || 15)
   }
@@ -355,7 +392,7 @@ function TeacherDashboard() {
         throw new Error(err.error || 'No se pudo reabrir')
       }
       await load()
-      toast.success(`Sesión reabierta por ${reopenMinutes} minutos`)
+      toast.success(`Sesion reabierta por ${reopenMinutes} minutos`)
     } catch (e) {
       toast.error((e as Error).message)
     } finally {
@@ -370,10 +407,10 @@ function TeacherDashboard() {
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || 'No se pudo borrar la sesión')
+        throw new Error(err.error || 'No se pudo borrar la sesion')
       }
       await load()
-      toast.success('Sesión eliminada (y todas sus asistencias)')
+      toast.success('Sesion eliminada (y todas sus asistencias)')
     } catch (e) {
       toast.error((e as Error).message)
     }
@@ -477,7 +514,7 @@ function TeacherDashboard() {
       return
     }
     if (ownNew !== ownConfirm) {
-      toast.error('La nueva contraseña y su confirmación no coinciden')
+      toast.error('La nueva contraseña y su confirmacion no coinciden')
       return
     }
     if (ownNew.length < 6) {
@@ -501,9 +538,13 @@ function TeacherDashboard() {
       if (!res.ok) {
         throw new Error(data.error || 'No se pudo cambiar la contraseña')
       }
-      toast.success('Contraseña cambiada. Recuerda usar la nueva la próxima vez.')
+      // Si hay `notice` (caso admin root), NO mostrar "Contraseña cambiada"
+      // porque no se cambió nada — la API solo validó que sepas la actual.
+      // Para cambiar la del admin hay que editar la env var en Render.
       if (data.notice) {
-        toast.info(data.notice, { duration: 8000 })
+        toast.warning(data.notice, { duration: 10000 })
+      } else {
+        toast.success('Contraseña cambiada. Recorda usar la nueva la proxima vez.')
       }
       setOwnPwOpen(false)
       setOwnCurrent('')
@@ -523,7 +564,7 @@ function TeacherDashboard() {
       return
     }
     if (resetNew !== resetConfirm) {
-      toast.error('La nueva contraseña y su confirmación no coinciden')
+      toast.error('La nueva contraseña y su confirmacion no coinciden')
       return
     }
     if (resetNew.length < 6) {
@@ -571,7 +612,7 @@ function TeacherDashboard() {
 
   const createUser = async () => {
     if (!newUserUsername.trim() || !newUserName.trim() || newUserPassword.length < 6) {
-      toast.error('Completa todos los campos (password mínimo 6 caracteres)')
+      toast.error('Completa todos los campos (password minimo 6 caracteres)')
       return
     }
     setCreatingUser(true)
@@ -701,7 +742,7 @@ function TeacherDashboard() {
             logout()
             toast.success('Sesion cerrada')
           }}
-          title="Cerrar sesión"
+          title="Cerrar sesion"
         >
           Salir
         </Button>
@@ -780,7 +821,7 @@ function TeacherDashboard() {
             <DialogTitle>Cambiar contraseña de {resetUser?.name}</DialogTitle>
             <DialogDescription>
               Como admin, no necesitas saber la contraseña actual. Solo definí
-              la nueva (mínimo 6 caracteres). Avísale al profesor.
+              la nueva (mínimo 6 caracteres). Avisale al profesor.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 py-2">
@@ -827,7 +868,7 @@ function TeacherDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog: Reabrir sesión con minutos custom (v14.3) */}
+      {/* Dialog: Reabrir sesion con minutos custom (v14.3) */}
       <Dialog
         open={!!reopenSession}
         onOpenChange={(o) => { if (!o) setReopenSession(null) }}
@@ -904,16 +945,16 @@ function TeacherDashboard() {
               </CardTitle>
               <CardDescription>
                 Genera un QR con vigencia limitada. Tus alumnos lo escanean y
-                registran su matrícula. Detectamos trampa si el mismo dispositivo
-                intenta registrar con otra matrícula.
+                registran su matricula. Detectamos trampa si el mismo dispositivo
+                intenta registrar con otra matricula.
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4">
               <div className="grid gap-2">
-                <Label htmlFor="name">Nombre de la sesión</Label>
+                <Label htmlFor="name">Nombre de la sesion</Label>
                 <Input
                   id="name"
-                  placeholder="Ej. Sesión del 15 oct - Repaso parcial"
+                  placeholder="Ej. Sesion del 15 oct - Repaso parcial"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   onKeyDown={(e) => {
@@ -1024,7 +1065,7 @@ function TeacherDashboard() {
           ) : sessions.length === 0 ? (
             <Card>
               <CardContent className="py-10 text-center text-sm text-zinc-500">
-                No hay sesiones todavía. Crea una arriba para empezar.
+                No hay sesiones todavia. Crea una arriba para empezar.
               </CardContent>
             </Card>
           ) : (
@@ -1060,7 +1101,7 @@ function TeacherDashboard() {
                 <Label htmlFor="subjname">Nombre</Label>
                 <Input
                   id="subjname"
-                  placeholder="Ej. Cálculo Diferencial - Grupo A"
+                  placeholder="Ej. Calculo Diferencial - Grupo A"
                   value={newSubjectName}
                   onChange={(e) => setNewSubjectName(e.target.value)}
                   onKeyDown={(e) => {
@@ -1264,8 +1305,8 @@ function TeacherDashboard() {
                               <AlertDialogHeader>
                                 <AlertDialogTitle>¿Eliminar a {u.name}?</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  Se borrara el profesor. Sus materias quedarán sin dueño
-                                  (puedes reasignarlas despues). Esta acción no se puede deshacer.
+                                  Se borrara el profesor. Sus materias quedaran sin dueno
+                                  (puedes reasignarlas despues). Esta accion no se puede deshacer.
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
@@ -1382,26 +1423,10 @@ function SessionRow({
                 minute: '2-digit',
               })}{' '}
               -{' '}
-              {(() => {
-                // Si startsAt y endsAt son el mismo día, solo mostramos la hora
-                // del cierre (más limpio). Si son distintos días, mostramos
-                // fecha + hora del cierre (para que se vea claramente cuándo
-                // caduca, no solo la hora).
-                const sameDay =
-                  startsAt.toDateString() === endsAt.toDateString()
-                if (sameDay) {
-                  return endsAt.toLocaleTimeString('es-MX', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })
-                }
-                return endsAt.toLocaleString('es-MX', {
-                  day: '2-digit',
-                  month: '2-digit',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
-              })()}
+              {endsAt.toLocaleTimeString('es-MX', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
             </span>
           </div>
           <div className="text-sm font-medium text-zinc-800 truncate">
@@ -1468,12 +1493,12 @@ function SessionRow({
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>¿Eliminar esta sesión?</AlertDialogTitle>
+                <AlertDialogTitle>¿Eliminar esta sesion?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Se borrara permanentemente la sesión{' '}
+                  Se borrara permanentemente la sesion{' '}
                   <strong className="text-zinc-900">{s.name}</strong> junto con{' '}
                   {s._count?.attendances ?? 0} registro(s) de asistencia
-                  asociado(s). Esta acción no se puede deshacer.
+                  asociado(s). Esta accion no se puede deshacer.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -1549,7 +1574,7 @@ function SubjectRow({
                 <AlertDialogTitle>¿Eliminar esta materia?</AlertDialogTitle>
                 <AlertDialogDescription>
                   Se borrara <strong className="text-zinc-900">{s.name}</strong>.
-                  Las sesiones asociadas NO se borran, pero quedarán sin materia
+                  Las sesiones asociadas NO se borran, pero quedaran sin materia
                   asignada.
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -1695,7 +1720,7 @@ function SessionStatsDialog({
       ['Sospechosas', data.stats.sospechosas],
       ['% Asistencia', data.stats.percent !== null ? data.stats.percent + '%' : 'N/A'],
     ]
-    const ws1 = XLSX.utils.aoa_to_sheet(summary)
+    const ws1 = XLSX.utils.aoa_to_sheet(sanitizeMatrix(summary))
     ws1['!cols'] = [{ wch: 25 }, { wch: 40 }]
     XLSX.utils.book_append_sheet(wb, ws1, 'Resumen')
 
@@ -1719,7 +1744,7 @@ function SessionStatsDialog({
         a.ip ?? '',
       ]),
     ]
-    const ws2 = XLSX.utils.aoa_to_sheet(rows)
+    const ws2 = XLSX.utils.aoa_to_sheet(sanitizeMatrix(rows))
     ws2['!cols'] = [
       { wch: 30 }, // Sesion
       { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 35 },
@@ -1799,7 +1824,7 @@ function SessionStatsDialog({
               <table className="w-full text-sm">
                 <thead className="bg-zinc-50 sticky top-0">
                   <tr>
-                    <th className="text-left font-medium px-3 py-2">Matrícula</th>
+                    <th className="text-left font-medium px-3 py-2">Matricula</th>
                     <th className="text-left font-medium px-3 py-2">Nombre</th>
                     <th className="text-left font-medium px-3 py-2">Hora</th>
                     <th className="text-left font-medium px-3 py-2">Estado</th>
@@ -1901,17 +1926,17 @@ function SubjectStatsDialog({
     const summary = [
       ['Materia', data.subject.name],
       ['Total sesiones', data.totals.totalSesiones],
-      ['Alumnos únicos', data.totals.totalAlumnosUnicos],
+      ['Alumnos unicos', data.totals.totalAlumnosUnicos],
       ['Total asistencias', data.totals.totalAsistencias],
       ['% asistencia promedio', data.totals.promedioAsistencia + '%'],
     ]
-    const ws1 = XLSX.utils.aoa_to_sheet(summary)
+    const ws1 = XLSX.utils.aoa_to_sheet(sanitizeMatrix(summary))
     ws1['!cols'] = [{ wch: 25 }, { wch: 30 }]
     XLSX.utils.book_append_sheet(wb, ws1, 'Resumen')
 
     // Hoja 2: sesiones
     const sesRows = [
-      ['Nombre sesión', 'Fecha', 'Estado', 'Esperados', 'Asistencias'],
+      ['Nombre sesion', 'Fecha', 'Estado', 'Esperados', 'Asistencias'],
       ...data.sessions.map((s: any) => [
         s.name,
         new Date(s.startsAt).toLocaleString('es-MX'),
@@ -1920,7 +1945,7 @@ function SubjectStatsDialog({
         s.attendanceCount,
       ]),
     ]
-    const ws2 = XLSX.utils.aoa_to_sheet(sesRows)
+    const ws2 = XLSX.utils.aoa_to_sheet(sanitizeMatrix(sesRows))
     ws2['!cols'] = [{ wch: 30 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 12 }]
     XLSX.utils.book_append_sheet(wb, ws2, 'Sesiones')
 
@@ -1929,7 +1954,7 @@ function SubjectStatsDialog({
     // (los datos son agregados por materia, asi que la columna es la misma para todas las filas
     // pero es util cuando combinas exports de varias materias)
     const stuRows = [
-      ['Materia', 'Matrícula', 'Nombre(s)', 'Apellido paterno', 'Apellido materno', 'Nombre completo', 'Asistencias', 'Total sesiones', '% Asistencia', 'Sospechosas', 'Primera vez visto', 'Ultima vez visto'],
+      ['Materia', 'Matricula', 'Nombre(s)', 'Apellido paterno', 'Apellido materno', 'Nombre completo', 'Asistencias', 'Total sesiones', '% Asistencia', 'Sospechosas', 'Primera vez visto', 'Ultima vez visto'],
       ...data.students.map((s: any) => [
         data.subject.name,
         s.studentId,
@@ -1947,7 +1972,7 @@ function SubjectStatsDialog({
         new Date(s.lastSeen).toLocaleString('es-MX'),
       ]),
     ]
-    const ws3 = XLSX.utils.aoa_to_sheet(stuRows)
+    const ws3 = XLSX.utils.aoa_to_sheet(sanitizeMatrix(stuRows))
     ws3['!cols'] = [
       { wch: 30 }, // Materia
       { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 35 },
@@ -1990,7 +2015,7 @@ function SubjectStatsDialog({
                 <div className="text-2xl font-bold text-emerald-700">
                   {data.totals.totalAlumnosUnicos}
                 </div>
-                <div className="text-[10px] text-emerald-800 uppercase">Alumnos únicos</div>
+                <div className="text-[10px] text-emerald-800 uppercase">Alumnos unicos</div>
               </div>
               <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
                 <div className="text-2xl font-bold text-emerald-700">
@@ -2019,7 +2044,7 @@ function SubjectStatsDialog({
               <table className="w-full text-sm">
                 <thead className="bg-zinc-50 sticky top-0">
                   <tr>
-                    <th className="text-left font-medium px-3 py-2">Matrícula</th>
+                    <th className="text-left font-medium px-3 py-2">Matricula</th>
                     <th className="text-left font-medium px-3 py-2">Nombre</th>
                     <th className="text-center font-medium px-3 py-2">Asist.</th>
                     <th className="text-center font-medium px-3 py-2">Total</th>
@@ -2680,7 +2705,7 @@ function StudentAttendanceForm({ token }: { token: string }) {
                   maxLength={9}
                 />
                 <p className="text-[10px] text-zinc-500">
-                  Formato: AASSFNNNN — AA = año (08-99), SS = semestre, F =
+                  Formato: AASSFNNNN — AA = ano (08-99), SS = semestre, F =
                   letra F, NNNN = consecutivo.
                   {studentId.length > 0 && !isMatriculaValid && (
                     <span className="text-red-600 ml-1">Formato invalido</span>

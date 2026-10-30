@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createHmac, randomBytes } from 'crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'crypto'
 
 /**
  * Huella de dispositivo calculada en el SERVIDOR (no en el cliente).
@@ -69,19 +69,16 @@ const COOKIE_NAME = 'asist_track'
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 365 // 1 año
 
 function getTrackingSecret(): string {
-  // Si TRACKING_SECRET esta configurado, lo usamos.
-  // Si no, derivamos de ADMIN_PASSWORD (que SI o SI debe estar para que el
-  // sistema funcione). Antes (v1..v12) habia un fallback a 'derived-no-teacher-pw'
-  // que era un string PUBLICO -> cualquiera podia forjar cookies de tracking.
-  // Ya NO: si no hay secreto, throw.
-  const s =
-    process.env.TRACKING_SECRET ||
-    process.env.ADMIN_PASSWORD ||
-    process.env.TEACHER_PASSWORD
-  if (!s || s.length < 6) {
+  // SEGURIDAD ESTRICTA (v16.1+): TRACKING_SECRET es obligatorio. NO hay
+  // fallback a ADMIN_PASSWORD. Si un atacante conociera la password del
+  // admin, no debería poder forjar cookies de tracking — eso requeriría
+  // conocer TRACKING_SECRET, que es distinto.
+  const s = process.env.TRACKING_SECRET
+  if (!s || s.length < 32) {
     throw new Error(
-      'TRACKING_SECRET (o ADMIN_PASSWORD como fallback) no configurado. ' +
-        'Sin esto no podemos firmar cookies de tracking anti-trampa de forma segura.'
+      'TRACKING_SECRET no configurado o demasiado corto (mínimo 32 caracteres). ' +
+        'Setealo en Render → Environment Variables (debe ser DISTINTO de JWT_SECRET). ' +
+        'Generá uno con: openssl rand -hex 32.'
     )
   }
   return s
@@ -100,7 +97,10 @@ export function getOrCreateTrackingUuid(
       const expectedSig = createHmac('sha256', getTrackingSecret())
         .update(uuid)
         .digest('hex')
-      if (sig === expectedSig) {
+      // Comparacion constant-time (anti timing-attack, CWE-208).
+      // Antes usabamos === que permitia a un atacante medir el tiempo de
+      // respuesta para deducir byte a byte el signature esperado.
+      if (sig.length === expectedSig.length && safeEqual(sig, expectedSig)) {
         return uuid
       }
     }
@@ -124,6 +124,19 @@ export function getOrCreateTrackingUuid(
   }
 
   return newUuid
+}
+
+/**
+ * Comparacion constant-time (anti timing-attack).
+ * Retorna false rapido solo si las longitudes difieren.
+ */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  try {
+    return timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))
+  } catch {
+    return false
+  }
 }
 
 export const TRACKING_COOKIE_NAME = COOKIE_NAME

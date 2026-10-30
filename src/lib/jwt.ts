@@ -6,32 +6,33 @@ import { createHmac, timingSafeEqual } from 'crypto'
  *
  * El payload contiene: { userId, username, role, name, iat }
  *
- * Nota sobre seguridad del SECRET:
- *   - Si JWT_SECRET esta seteado, lo usamos.
- *   - Si no, intentamos con ADMIN_PASSWORD (que SI o SI debe estar).
- *   - Si NINGUNO de los dos esta, THROW. Preferimos romper el server
- *     a usar un secreto hardcoded publico que cualquiera podria adivinar
- *     para forjar JWTs de admin.
+ * SEGURIDAD ESTRICTA (v16.1+):
+ *   - El secreto HMAC se obtiene de JWT_SECRET (env var) UNICAMENTE.
+ *   - NO hay fallback a ADMIN_PASSWORD ni a ningún otro env var.
+ *   - Si JWT_SECRET no está seteado (o es < 32 chars), el servidor THROW.
+ *   - Mejor romper que ser vulnerable: si JWT_SECRET falta, nadie puede
+ *     firmar JWTs — ni el admin legítimo ni un atacante.
  *
- * En versiones anteriores (v1..v12) habia un fallback a 'fallback-secret-change-me'
- * que era un string HARDCODED PUBLICO en el codigo fuente -> cualquier atacante
- * podria forjar cookies de admin. ESTO YA NO ES EL CASO.
+ * Razón: si el fallback fuera a ADMIN_PASSWORD, un atacante que descubra
+ * la password de un profesor podría firmar JWTs con role:ADMIN. Con
+ * JWT_SECRET dedicado, conocer passwords de usuarios no sirve para
+ * forjar tokens.
  */
 
 const COOKIE_NAME = 'checador_session'
 const MAX_AGE = 7 * 24 * 60 * 60 * 1000 // 7 dias en ms
+const MIN_JWT_SECRET_LENGTH = 32 // mínimo recomendado para HMAC-SHA256
 
 let cachedSecret: string | null = null
 function getSecret(): string {
   if (cachedSecret) return cachedSecret
-  const s =
-    process.env.JWT_SECRET ||
-    process.env.ADMIN_PASSWORD ||
-    process.env.TEACHER_PASSWORD
-  if (!s || s.length < 6) {
+  const s = process.env.JWT_SECRET
+  if (!s || s.length < MIN_JWT_SECRET_LENGTH) {
     throw new Error(
-      'JWT_SECRET no configurado. Setea JWT_SECRET (o al menos ADMIN_PASSWORD) en las variables de entorno. ' +
-        'Sin esto, no podemos firmar cookies de sesion de forma segura.'
+      `JWT_SECRET no configurado o demasiado corto (mínimo ${MIN_JWT_SECRET_LENGTH} caracteres). ` +
+        'Setealo en Render → Environment Variables. ' +
+        'Generá uno con: openssl rand -hex 32  (o node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"). ' +
+        'NO hay fallback — mejor romper que permitir forjar JWTs.'
     )
   }
   cachedSecret = s

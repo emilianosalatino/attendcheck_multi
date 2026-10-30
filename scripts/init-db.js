@@ -21,10 +21,15 @@ CREATE TABLE IF NOT EXISTS "User" (
     "name" TEXT NOT NULL,
     "passwordHash" TEXT NOT NULL,
     "role" TEXT NOT NULL DEFAULT 'TEACHER',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "passwordChangedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "User_username_key" ON "User"("username");
 CREATE INDEX IF NOT EXISTS "User_role_idx" ON "User"("role");
+
+-- Migracion v16.1: agregar passwordChangedAt a Users existentes
+-- (para soporte de revocacion de JWT al cambiar password)
+ALTER TABLE "User" ADD COLUMN "passwordChangedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
 -- Migracion: si la tabla User ya existe con columna "email" (versiones v11 y anteriores),
 -- renombrarla a "username" para que coincida con el schema Prisma actual.

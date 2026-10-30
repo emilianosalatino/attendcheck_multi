@@ -48,6 +48,18 @@ function safeEqual(a: string, b: string): boolean {
  * Obtiene el usuario actual desde el cookie JWT.
  * Retorna null si no hay sesion o es invalida.
  *
+ * Seguridad de revocación (CWE-613):
+ *   - Verifica la firma del JWT (HMAC).
+ *   - Verifica expiración (7 días).
+ *   - Para usuarios en la tabla User (NO admin-root): consulta la DB para
+ *     confirmar que el usuario sigue existiendo Y que passwordChangedAt
+ *     sea <= iat del JWT. Si el admin cambió la password del usuario o lo
+ *     borró, el JWT se invalida inmediatamente.
+ *   - El admin-root (env vars) no se puede invalidar via DB porque no
+ *     está en la tabla. Para invalidar sus sesiones, hay que cambiar
+ *     JWT_SECRET en env vars (eso invalida todos los JWTs, no solo los
+ *     del admin).
+ *
  * Nota: el JWT de sesiones viejas trae campo "email" en lugar de "username".
  * Siempre exponemos "username" al consumidor; si viene del campo legacy,
  * lo copiamos.
@@ -59,11 +71,41 @@ export async function getCurrentUser(req: NextRequest): Promise<CurrentUser | nu
   if (!payload) return null
   // Soporte legacy: JWTs firmados antes de v12 traen "email" en vez de "username"
   const username = (payload as any).username || (payload as any).email || ''
-  return {
-    userId: payload.userId,
-    username,
-    role: payload.role as 'ADMIN' | 'TEACHER',
-    name: payload.name,
+  // Admin root: no consultar DB. La revocación se hace via cambio de JWT_SECRET.
+  if (payload.userId === 'admin-root') {
+    return {
+      userId: payload.userId,
+      username,
+      role: payload.role as 'ADMIN' | 'TEACHER',
+      name: payload.name,
+    }
+  }
+  // Usuarios de la tabla User: consultar DB para verificar vigencia.
+  // Si el user fue borrado o cambió su password después de emitirse el JWT,
+  // passwordChangedAt > payload.iat → rechazamos.
+  try {
+    const dbUser = await db.user.findUnique({
+      where: { id: payload.userId },
+      select: { id: true, username: true, name: true, role: true, passwordChangedAt: true },
+    })
+    if (!dbUser) {
+      // User fue borrado: JWT ya no válido
+      return null
+    }
+    if (dbUser.passwordChangedAt && payload.iat < dbUser.passwordChangedAt.getTime()) {
+      // Password cambió después de firmado el JWT: invalidar
+      return null
+    }
+    return {
+      userId: dbUser.id,
+      username: dbUser.username,
+      role: dbUser.role as 'ADMIN' | 'TEACHER',
+      name: dbUser.name,
+    }
+  } catch {
+    // Si falla la consulta a DB (por ej. offline), mejor no dejar pasar
+    // un token no verificado. Returning null fuerza re-login.
+    return null
   }
 }
 
