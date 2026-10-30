@@ -4,6 +4,7 @@ import {
   computeServerFingerprint,
   getOrCreateTrackingUuid,
 } from '@/lib/server-fingerprint'
+import { rateLimit } from '@/lib/rate-limit'
 
 /**
  * POST /api/attendance
@@ -36,13 +37,33 @@ import {
  */
 export async function POST(req: NextRequest) {
   try {
+    // Rate limit: 30 registros por IP por minuto. Mitiga saturación/spam.
+    // Es menos restrictivo que login porque los alumnos reales lo necesitan,
+    // pero alcanza para frenar a un script que quiera inyectar miles.
+    const limited = rateLimit(req, { key: 'attendance', max: 30, windowMs: 60_000 })
+    if (limited) return limited
+
     const body = await req.json().catch(() => ({}))
     const token = String(body.token || '').trim()
     const studentId = String(body.studentId || '').trim().toUpperCase()
     // Nombres del alumno (Fase 1). El form los envia; los sanitamos y guardamos.
+    // Anti-inyección de fórmulas Excel (CWE-1236): si el nombre empieza con
+    // = + - @ \t \r, lo rechazamos de entrada. La UI también hace sanitize
+    // al exportar, pero defensa en profundidad — mejor no guardar nombres que
+    // claramente son intentos de inyección.
     const studentGivenNames = String(body.studentGivenNames || '').trim().slice(0, 100)
     const studentPaternalSurname = String(body.studentPaternalSurname || '').trim().slice(0, 100)
     const studentMaternalSurname = String(body.studentMaternalSurname || '').trim().slice(0, 100)
+
+    const formulaPattern = /^[=+\-@\t\r]/
+    if (formulaPattern.test(studentGivenNames) ||
+        formulaPattern.test(studentPaternalSurname) ||
+        formulaPattern.test(studentMaternalSurname)) {
+      return NextResponse.json(
+        { error: 'Los nombres no pueden empezar con = + - @' },
+        { status: 400 }
+      )
+    }
 
     if (!token || !studentId) {
       return NextResponse.json(

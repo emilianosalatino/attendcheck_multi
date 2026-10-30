@@ -44,7 +44,7 @@ export async function PATCH(
   }
   const { id } = await params
   const body = await req.json().catch(() => ({}))
-  const data: { name?: string; passwordHash?: string } = {}
+  const data: { name?: string; passwordHash?: string; passwordChangedAt?: Date } = {}
 
   if (body.name !== undefined) {
     data.name = String(body.name).replace(/<[^>]*>/g, '').trim().slice(0, 200)
@@ -62,6 +62,9 @@ export async function PATCH(
     }
     const bcrypt = await import('bcryptjs')
     data.passwordHash = await bcrypt.hash(newPw, 10)
+    // Invalidar JWTs viejos: si el admin resetea la password de un profesor,
+    // cualquier sesión activa del profesor se cae inmediatamente.
+    data.passwordChangedAt = new Date()
   }
 
   try {

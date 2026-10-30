@@ -103,7 +103,14 @@ export async function POST(req: NextRequest) {
   const newHash = await bcrypt.hash(newPassword, 10)
   await db.user.update({
     where: { id: dbUser.id },
-    data: { passwordHash: newHash },
+    data: {
+      passwordHash: newHash,
+      // Actualizar passwordChangedAt para invalidar TODOS los JWTs emitidos
+      // antes de este cambio. El usuario que cambia su password se loguea
+      // de nuevo con el nuevo password → se le emite un JWT con iat nuevo.
+      // JWTs viejos (robados o en otros navegadores) → iat < passwordChangedAt → rechazados.
+      passwordChangedAt: new Date(),
+    },
   })
 
   return NextResponse.json({ ok: true })

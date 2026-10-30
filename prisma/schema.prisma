@@ -23,6 +23,12 @@ model User {
   /// "ADMIN" o "TEACHER"
   role         String   @default("TEACHER")
   createdAt    DateTime @default(now())
+  /// Fecha del último cambio de contraseña. Siempre que se cambia la password
+  /// se actualiza este campo, lo que invalida todos los JWTs emitidos antes.
+  /// El payload del JWT incluye iat (timestamp de firma); al verificar comparamos
+  /// iat vs passwordChangedAt — si iat < passwordChangedAt, el token se rechaza.
+  /// Default: createdAt (al crear el user, todas las passwords son "cambió" en ese momento)
+  passwordChangedAt DateTime @default(now())
 
   subjects Subject[]
   /// Sesiones creadas por este usuario (ownership directo, independientemente del subject)
