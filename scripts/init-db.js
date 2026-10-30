@@ -29,7 +29,13 @@ CREATE INDEX IF NOT EXISTS "User_role_idx" ON "User"("role");
 
 -- Migracion v16.1: agregar passwordChangedAt a Users existentes
 -- (para soporte de revocacion de JWT al cambiar password)
-ALTER TABLE "User" ADD COLUMN "passwordChangedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;
+-- NOTA: SQLite no permite DEFAULT CURRENT_TIMESTAMP en ALTER TABLE ADD COLUMN
+-- (solo constantes literales). Usamos '2000-01-01' como default para users
+-- existentes — eso significa que sus JWTs actuales (con iat = hoy) siguen
+-- siendo válidos hasta su expiración natural (7 días). Cuando cambien su
+-- password, passwordChangedAt se actualiza a NOW() y los JWTs viejos se
+-- invalidan. Eso es lo que queremos.
+ALTER TABLE "User" ADD COLUMN "passwordChangedAt" DATETIME NOT NULL DEFAULT '2000-01-01T00:00:00Z';
 
 -- Migracion: si la tabla User ya existe con columna "email" (versiones v11 y anteriores),
 -- renombrarla a "username" para que coincida con el schema Prisma actual.
